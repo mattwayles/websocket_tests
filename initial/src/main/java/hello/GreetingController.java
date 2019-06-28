@@ -1,9 +1,11 @@
 package hello;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.event.EventListener;
 import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.messaging.handler.annotation.SendTo;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Controller;
 import org.springframework.web.socket.messaging.SessionSubscribeEvent;
 import org.springframework.web.socket.messaging.SessionUnsubscribeEvent;
@@ -56,24 +58,26 @@ public class GreetingController {
     //Receive a HelloMessage and generate a Greeting
     public Greeting greeting(HelloMessage message) {
         Greeting greeting = new Greeting("Everything Worked");
-        unacknowledgedMessages.put(greeting.getMessageId(), subscribers);
-        System.out.println("Server has sent message " + greeting.getMessageId() + " to " + subscribers.size() + " subscribers. Awaiting receipt...");
+        unacknowledgedMessages.put(greeting.getMessageId(), new ArrayList<>(subscribers));
+        System.out.println("Server has sent message " + greeting.getMessageId() + " to " + subscribers.size() +
+                " subscribers. Awaiting receipt...");
 
-        try {
+            Runnable r = () -> {
+                try {
+                    Thread.sleep(5000);
+                    if (unacknowledgedMessages.containsKey(greeting.getMessageId())) {
+                        boolean multiFail = unacknowledgedMessages.get(greeting.getMessageId()).size() > 1;
+                        System.err.println("Never received acknowledgment of receipt of message " + greeting.getMessageId() +
+                                " from subscriber" + (multiFail ? "s " : " ") + unacknowledgedMessages.get(greeting.getMessageId()) +
+                                ". Attempting to resend...");
+                        //TODO: Attempt to resend only to missing nodes
+                    }
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+            };
 
-            //TODO: This needs to run in background
-            Thread.sleep(5000);
-            if (unacknowledgedMessages.containsKey(greeting.getMessageId())) {
-                boolean multiFail = unacknowledgedMessages.get(greeting.getMessageId()).size() > 1;
-                System.err.println("Never received acknowledgment of receipt of message " + greeting.getMessageId() +
-                        " from subscriber" + (multiFail ? "s " : " ") + unacknowledgedMessages.get(greeting.getMessageId()) +
-                        ". Attempting to resend...");
-                //TODO: Attempt to resend only to missing nodes
-            }
-        } catch (InterruptedException e) {
-            e.printStackTrace();
-        }
-
+            new Thread(r).start();
         return greeting;
     }
 
@@ -91,16 +95,18 @@ public class GreetingController {
             System.out.print("Server has received acknowledgement for message ID " + clientAckObj.getMessageId() + " from client " + clientAckObj.getSubId() + ".");
 
             //Check if any outstanding acknowledgments remain for this message
-            if (unacknowledgedMessages.get(clientAckObj.getMessageId()).size() == 1) {
-                System.out.println();
-                System.out.println("All clients have acknowledged " + clientAckObj.getMessageId() + ". Removing from queue");
+            if (unacknowledgedMessages.containsKey(clientAckObj.getMessageId())) {
+                if (unacknowledgedMessages.get(clientAckObj.getMessageId()).size() == 1) {
+                    System.out.println();
+                    System.out.println("All clients have acknowledged " + clientAckObj.getMessageId() + ". Removing from queue");
 
-                //If no outstanding acknowledgments remain, remove the message from the map completely
-                unacknowledgedMessages.remove(clientAckObj.getMessageId());
-            } else {
-                //Remove the subscription ID from this message in the unacknowledgedMessages map
-                unacknowledgedMessages.get(clientAckObj.getMessageId()).remove(clientAckObj.getSubId());
-                System.out.println(" Still awaiting receipt from " + unacknowledgedMessages.get(clientAckObj.getMessageId()));
+                    //If no outstanding acknowledgments remain, remove the message from the map completely
+                    unacknowledgedMessages.remove(clientAckObj.getMessageId());
+                } else {
+                    //Remove the subscription ID from this message in the unacknowledgedMessages map
+                    unacknowledgedMessages.get(clientAckObj.getMessageId()).remove(clientAckObj.getSubId());
+                    System.out.println(" Still awaiting receipt from " + unacknowledgedMessages.get(clientAckObj.getMessageId()));
+                }
             }
         } catch (IOException e) {
             e.printStackTrace();
